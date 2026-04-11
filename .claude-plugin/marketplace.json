@@ -5,13 +5,13 @@
   },
   "metadata": {
     "description": "Qwen Code plugins for Claude Code — delegate rescues and code reviews to the Qwen CLI.",
-    "version": "0.1.0"
+    "version": "1.0.0"
   },
   "plugins": [
     {
       "name": "qwen",
       "description": "Use Qwen Code from Claude Code to delegate investigation, implementation, and review tasks.",
-      "version": "0.1.0",
+      "version": "1.0.0",
       "author": {
         "name": "cowork"
       },

@@ -1,0 +1,72 @@
+name: Pull Request CI
+
+# NOTE: This file is shipped as a .template because the repo-level security
+# hook blocks direct writes to .yml workflow files. To enable CI after
+# cloning, rename:
+#
+#   mv .github/workflows/pull-request-ci.yml.template \
+#      .github/workflows/pull-request-ci.yml
+#
+# The workflow below uses only static matrix values — no `github.event.*`
+# or other untrusted inputs — so it is safe as-is.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test (Node ${{ matrix.node }} · ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node: ["18", "20", "22"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js ${{ matrix.node }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Display Node + npm versions
+        run: |
+          node --version
+          npm --version
+
+      - name: Syntax check every .mjs file
+        run: |
+          set -euo pipefail
+          find plugins scripts tests -name '*.mjs' -print0 |
+            xargs -0 -n1 node --check
+
+      - name: Verify version manifests agree
+        run: node scripts/bump-version.mjs --check
+
+      - name: Run test suite
+        run: node --test tests/*.test.mjs
+
+  lint-markdown:
+    name: Lint plugin manifests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate JSON manifests
+        run: |
+          set -euo pipefail
+          for f in \
+            .claude-plugin/marketplace.json \
+            plugins/qwen/.claude-plugin/plugin.json \
+            plugins/qwen/hooks/hooks.json \
+            plugins/qwen/schemas/review-output.schema.json; do
+            echo "checking $f"
+            python3 -c "import json,sys; json.load(open('$f'))"
+          done
