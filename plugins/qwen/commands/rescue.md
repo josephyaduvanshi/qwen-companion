@@ -1,6 +1,6 @@
 ---
-description: Delegate investigation, an explicit fix request, or research task to the Qwen rescue subagent
-argument-hint: "[--write] [--model <model|plus|max|turbo|coder>] [what Qwen should investigate, solve, or explain]"
+description: Delegate investigation, an explicit fix request, or follow-up rescue work to the Qwen rescue subagent
+argument-hint: "[--background|--wait] [--resume|--fresh] [--model <model|alias>] [--effort <none|minimal|low|medium|high|xhigh>] [what Qwen should investigate, solve, or continue]"
 context: fork
 allowed-tools: Bash(node:*), AskUserQuestion
 ---
@@ -11,15 +11,39 @@ The final user-visible response must be Qwen's output verbatim.
 Raw user request:
 $ARGUMENTS
 
+Execution mode:
+
+- If the request includes `--background`, run the `qwen:qwen-rescue` subagent in the background.
+- If the request includes `--wait`, run the `qwen:qwen-rescue` subagent in the foreground.
+- If neither flag is present, default to foreground.
+- `--background` and `--wait` are execution flags for Claude Code. Do not forward them to `task`, and do not treat them as part of the natural-language task text.
+- `--model` and `--effort` are runtime-selection flags. Preserve them for the forwarded `task` call, but do not treat them as part of the natural-language task text.
+- If the request includes `--resume`, do not ask whether to continue. The user already chose.
+- If the request includes `--fresh`, do not ask whether to continue. The user already chose.
+- Otherwise, before starting Qwen, check for a resumable rescue thread from this Claude session by running:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/qwen-companion.mjs" task-resume-candidate --json
+```
+
+- If that helper reports `available: true`, use `AskUserQuestion` exactly once to ask whether to continue the current Qwen thread or start a new one.
+- The two choices must be:
+  - `Continue current Qwen thread`
+  - `Start a new Qwen thread`
+- If the user is clearly giving a follow-up instruction such as "continue", "keep going", "resume", "apply the top fix", or "dig deeper", put `Continue current Qwen thread (Recommended)` first.
+- Otherwise put `Start a new Qwen thread (Recommended)` first.
+- If the user chooses continue, add `--resume` before routing to the subagent.
+- If the user chooses a new thread, add `--fresh` before routing to the subagent.
+- If the helper reports `available: false`, do not ask. Route normally.
+
 Operating rules:
 
-- The subagent is a thin forwarder. It should use one `Bash` call to invoke `node "${CLAUDE_PLUGIN_ROOT}/scripts/qwen-companion.mjs" task ...` and return that command's stdout as-is.
+- The subagent is a thin forwarder only. It should use one `Bash` call to invoke `node "${CLAUDE_PLUGIN_ROOT}/scripts/qwen-companion.mjs" task ...` and return that command's stdout as-is.
 - Return the Qwen companion stdout verbatim to the user.
 - Do not paraphrase, summarize, rewrite, or add commentary before or after it.
 - Do not ask the subagent to inspect files, monitor progress, poll `/qwen:status`, fetch `/qwen:result`, call `/qwen:cancel`, summarize output, or do follow-up work of its own.
-- `--model` is a runtime-selection flag. Preserve it for the forwarded `task` call, but do not treat it as part of the natural-language task text.
-- Leave `--model` unset unless the user explicitly asks for a specific model.
-- If the user asks for `plus`/`max`/`turbo`/`coder`, map them to qwen aliases: `qwen3.5-plus`, `qwen3-max`, `qwen3-turbo`, `qwen3-coder-plus`. Any other string passes through unchanged.
-- Default to a write-capable Qwen run by adding `--write` unless the user explicitly asks for read-only behavior or only wants diagnosis, review, or research without edits.
+- Leave `--effort` unset unless the user explicitly asks for a specific reasoning effort.
+- Leave the model unset unless the user explicitly asks for one. Aliases: `plus`, `max`, `turbo`, `coder`, `glm`, `kimi`.
+- Leave `--resume` and `--fresh` in the forwarded request. The subagent handles that routing when it builds the `task` command.
+- If the helper reports that Qwen is missing or unauthenticated, stop and tell the user to run `/qwen:setup`.
 - If the user did not supply a request, ask what Qwen should investigate or fix.
-- If the companion reports that Qwen is missing or unauthenticated, stop and tell the user to run `/qwen:setup`.
