@@ -14,14 +14,14 @@ function scaffoldFakeRepo(version = "0.1.0") {
 
   fs.writeFileSync(
     path.join(dir, "package.json"),
-    JSON.stringify({ name: "qwen-plugin-cc", version }, null, 2) + "\n"
+    JSON.stringify({ name: "qwen-companion", version }, null, 2) + "\n"
   );
   fs.writeFileSync(
     path.join(dir, ".claude-plugin", "marketplace.json"),
     JSON.stringify(
       {
-        name: "qwen-plugin-cc",
-        owner: { name: "cowork" },
+        name: "qwen-companion",
+        owner: { name: "josephyaduvanshi" },
         metadata: { description: "", version },
         plugins: [{ name: "qwen", version, description: "", source: "./plugins/qwen" }]
       },

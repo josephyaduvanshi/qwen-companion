@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-// Session lifecycle hook for qwen-plugin-cc.
+// Session lifecycle hook for qwen-companion.
 //
 // Much simpler than the codex equivalent because we have no shared
 // app-server broker to shut down. Responsibilities:

@@ -101,5 +101,6 @@ Initial MVP baseline. `setup`, `rescue` (via `qwen-rescue` subagent),
 `status`, `result`, `cancel`, session-lifecycle hook, three skills, basic
 test suite. Never published; see the git history for details.
 
-[1.0.0]: https://github.com/<owner>/qwen-plugin-cc/releases/tag/v1.0.0
-[0.1.0]: https://github.com/<owner>/qwen-plugin-cc/releases/tag/v0.1.0
+[1.1.0]: https://github.com/josephyaduvanshi/qwen-companion/releases/tag/v1.1.0
+[1.0.0]: https://github.com/josephyaduvanshi/qwen-companion/releases/tag/v1.0.0
+[0.1.0]: https://github.com/josephyaduvanshi/qwen-companion/releases/tag/v0.1.0

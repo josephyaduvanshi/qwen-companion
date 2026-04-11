@@ -1,10 +1,10 @@
 {
-  "name": "qwen-plugin-cc",
+  "name": "qwen-companion",
   "owner": {
-    "name": "cowork"
+    "name": "josephyaduvanshi"
   },
   "metadata": {
-    "description": "Qwen Code plugins for Claude Code — delegate rescues and code reviews to the Qwen CLI.",
+    "description": "Qwen Code companion for Claude Code. Delegate rescues, investigations, and code reviews to the qwen CLI.",
     "version": "1.1.0"
   },
   "plugins": [
@@ -13,7 +13,7 @@
       "description": "Use Qwen Code from Claude Code to delegate investigation, implementation, and review tasks.",
       "version": "1.1.0",
       "author": {
-        "name": "cowork"
+        "name": "Joseph Yaduvanshi"
       },
       "source": "./plugins/qwen"
     }

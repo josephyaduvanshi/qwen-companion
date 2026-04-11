@@ -10,7 +10,7 @@ import path from "node:path";
 import process from "node:process";
 
 const FAKE_QWEN_SOURCE = String.raw`#!/usr/bin/env node
-// Auto-generated fake qwen binary for qwen-plugin-cc tests.
+// Auto-generated fake qwen binary for qwen-companion tests.
 import process from "node:process";
 
 const scenario = process.env.FAKE_QWEN_SCENARIO || "hello-world";

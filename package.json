@@ -1,10 +1,14 @@
 {
-  "name": "qwen-plugin-cc",
+  "name": "qwen-companion",
   "version": "1.1.0",
   "private": true,
   "type": "module",
-  "description": "Qwen Code plugins for Claude Code — derived from OpenAI's codex-plugin-cc and adapted for the Qwen CLI stream-json protocol.",
+  "description": "Qwen Code companion for Claude Code. Delegate rescues and code reviews to the qwen CLI from inside your Claude Code session.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/josephyaduvanshi/qwen-companion.git"
+  },
   "scripts": {
     "test": "node --test tests/*.test.mjs"
   },

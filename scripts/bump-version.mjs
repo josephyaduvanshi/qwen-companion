@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 //
-// Version bumping for qwen-plugin-cc. Ported from codex-plugin-cc's
+// Version bumping for qwen-companion. Ported from codex-plugin-cc's
 // scripts/bump-version.mjs with the target list rewritten for the qwen
-// plugin layout (no package-lock.json in v1, plugin manifest lives under
+// plugin layout (no package-lock.json, plugin manifest lives under
 // plugins/qwen/.claude-plugin/plugin.json).
 //
 // Usage:
