@@ -9,8 +9,8 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 
-const FAKE_QWEN_SOURCE = String.raw`#!/usr/bin/env node
-// Auto-generated fake qwen binary for qwen-companion tests.
+const FAKE_QWEN_SOURCE = String.raw`// Auto-generated fake qwen binary for qwen-companion tests.
+// Invoked by the sibling shell shim (./qwen) via \`node qwen.mjs "$@"\`.
 import process from "node:process";
 
 const scenario = process.env.FAKE_QWEN_SCENARIO || "hello-world";
@@ -135,15 +135,25 @@ run().catch((err) => {
 });
 `;
 
-export function installFakeQwen(dir = fs.mkdtempSync(path.join(os.tmpdir(), "qwen-plugin-fake-"))) {
+export function installFakeQwen(dir = fs.mkdtempSync(path.join(os.tmpdir(), "qwen-companion-fake-"))) {
+  // Write the ESM script as qwen.mjs so Node doesn't have to guess the
+  // module type. The actual "qwen" binary is a thin shell/cmd shim that
+  // execs `node qwen.mjs "$@"`. Without this two-file setup, spawning
+  // a shebang script without a nearby package.json fails on Node 18/20
+  // with "Cannot use import statement outside a module".
+  const scriptPath = path.join(dir, "qwen.mjs");
+  fs.writeFileSync(scriptPath, FAKE_QWEN_SOURCE, "utf8");
+
   const binPath = path.join(dir, os.platform() === "win32" ? "qwen.cmd" : "qwen");
   if (os.platform() === "win32") {
-    const shim = `@echo off\r\nnode "${path.join(dir, "qwen.mjs")}" %*\r\n`;
-    fs.writeFileSync(path.join(dir, "qwen.mjs"), FAKE_QWEN_SOURCE, "utf8");
-    fs.writeFileSync(binPath, shim, "utf8");
+    fs.writeFileSync(binPath, `@echo off\r\nnode "${scriptPath}" %*\r\n`, "utf8");
   } else {
-    fs.writeFileSync(binPath, FAKE_QWEN_SOURCE, "utf8");
+    fs.writeFileSync(
+      binPath,
+      `#!/bin/sh\nexec node "${scriptPath}" "$@"\n`,
+      "utf8"
+    );
     fs.chmodSync(binPath, 0o755);
   }
-  return { dir, binPath };
+  return { dir, binPath, scriptPath };
 }
