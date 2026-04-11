@@ -1,0 +1,13 @@
+qwen-plugin-cc
+Copyright 2026 cowork contributors
+
+This product includes software derived from codex-plugin-cc:
+  https://github.com/openai/codex-plugin-cc
+  Copyright 2025 OpenAI
+  Licensed under the Apache License, Version 2.0
+
+The architecture, state model, job tracking, command layout, skill design,
+and test harness conventions were adapted from that project. The CLI
+integration layer (`scripts/lib/qwen.mjs`) was rewritten from scratch to
+speak Qwen Code's stream-json protocol instead of the Codex app-server
+JSON-RPC protocol.
