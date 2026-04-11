@@ -1,15 +1,5 @@
 name: Pull Request CI
 
-# NOTE: This file is shipped as a .template because the repo-level security
-# hook blocks direct writes to .yml workflow files. To enable CI after
-# cloning, rename:
-#
-#   mv .github/workflows/pull-request-ci.yml.template \
-#      .github/workflows/pull-request-ci.yml
-#
-# The workflow below uses only static matrix values — no `github.event.*`
-# or other untrusted inputs — so it is safe as-is.
-
 on:
   pull_request:
     branches: [main]

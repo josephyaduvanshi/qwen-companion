@@ -356,7 +356,7 @@ Everything from [openai/codex-plugin-cc](https://github.com/openai/codex-plugin-
 | SessionStart / SessionEnd hook | ✅ | ✅ |
 | Touched-files tracking | ✅ from protocol | ✅ from qwen `tool_use` events (`write_file`, `edit`, `replace`, `create_file`) |
 | `scripts/bump-version.mjs` | ✅ | ✅ |
-| CI workflow | ✅ | ✅ shipped as `.yml.template` (rename after cloning) |
+| CI workflow | ✅ | ✅ `.github/workflows/pull-request-ci.yml` — test on Node 18/20/22 × Ubuntu/macOS |
 | Shared app-server broker | ✅ | ❌ intentional. Qwen has no persistent server mode. Per-task spawn is fine for rescue/review workflows. I'll adopt if upstream qwen adds one. |
 
 ---
@@ -469,14 +469,7 @@ node --test tests/runtime.test.mjs
 
 ### CI
 
-The CI workflow ships as `.github/workflows/pull-request-ci.yml.template`. Rename it to `.yml` after cloning:
-
-```bash
-mv .github/workflows/pull-request-ci.yml.template \
-   .github/workflows/pull-request-ci.yml
-```
-
-It runs the test suite on Node 18, 20, and 22 across Ubuntu and macOS, syntax-checks every `.mjs` file, and validates the JSON manifests.
+The CI workflow lives at `.github/workflows/pull-request-ci.yml`. It runs the test suite on Node 18, 20, and 22 across Ubuntu and macOS, syntax-checks every `.mjs` file, and validates the JSON manifests on every PR and push to `main`.
 
 ### Repo layout
 
