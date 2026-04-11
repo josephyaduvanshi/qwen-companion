@@ -26,21 +26,22 @@ There is at least one other community qwen plugin that builds on Qwen's
 
 ## Feature parity
 
-| Feature | codex-plugin-cc | qwen-plugin-cc v1.0 |
+| Feature | codex-plugin-cc | qwen-plugin-cc v1.1 |
 |---|---|---|
 | `/codex:setup` → `/qwen:setup` | ✅ | ✅ — detects qwen binary, auth, default model, review-gate state |
 | `/codex:rescue` → `/qwen:rescue` | ✅ | ✅ — full parity including `--model`/`--effort`/`--resume`/`--fresh` |
 | `/codex:review` → `/qwen:review` | ✅ via JSON-RPC `review/start` | ✅ via qwen's native `/review` slash command |
 | `/codex:adversarial-review` → `/qwen:adversarial-review` | ✅ with output schema | ✅ with the same schema enforced via `--append-system-prompt` |
 | `/codex:status` / `result` / `cancel` | ✅ | ✅ |
-| `--effort none..xhigh` | ✅ GPT-5.4 reasoning control | ✅ mapped to `--append-system-prompt` directives |
+| `--effort none..xhigh` | ✅ GPT-5.4 reasoning budget | ✅ real tool-call budget via `--max-session-turns` + system-prompt directives |
 | `--model <name\|alias>` | ✅ | ✅ with aliases `plus`, `max`, `turbo`, `coder`, `glm`, `kimi` |
 | `--background` task worker | ✅ | ✅ — detached subprocess, same job lifecycle |
 | `--resume-last` / `--fresh` | ✅ | ✅ via `qwen --chat-recording --resume <session>` |
+| Resume sees sessions from outside the plugin | ✅ (shared thread store) | ✅ — scans `~/.qwen/projects/<cwd>/chats/*.jsonl` for out-of-plugin sessions |
+| Graceful cancel | ✅ `turn/interrupt` RPC | ✅ two-phase `SIGINT → SIGTERM → SIGKILL` with 2s grace periods |
 | Stop-time review gate | ✅ | ✅ — `Stop` hook that BLOCK/ALLOW based on qwen review |
 | Session lifecycle hook | ✅ | ✅ — tears down session-scoped jobs on SessionEnd |
-| Shared app-server broker | ✅ | ❌ not needed — qwen has no persistent server |
-| `turn/interrupt` RPC | ✅ | ❌ cancel is PID-tree kill (`detached: true` + `kill(-pid)`) |
+| Shared app-server broker | ✅ | ❌ intentional — qwen has no persistent server mode. Per-task spawn costs ~0.5–2s on cold start, imperceptible for rescue/review workflows. Will adopt if upstream qwen ships a persistent server. |
 | `touchedFiles` from structured protocol | ✅ | ✅ from qwen `tool_use` events (`write_file`, `edit`, `replace`, `create_file`) |
 | Version-bumping tool | ✅ | ✅ `scripts/bump-version.mjs` |
 | CI workflow | ✅ | ✅ `.github/workflows/pull-request-ci.yml.template` (rename to `.yml` after cloning) |
@@ -102,11 +103,19 @@ Flags:
 - `--model <alias>` — `plus`/`max`/`turbo`/`coder`/`glm`/`kimi` or a full
   model string
 - `--effort <level>` — `none`/`minimal`/`low`/`medium`/`high`/`xhigh`.
-  `medium` is the default (no system-prompt injection). Other levels add
-  a short reasoning directive to `--append-system-prompt`.
+  `medium` is the default (unbounded). Low-effort levels impose a real
+  tool-call budget via `--max-session-turns`:
+  - `none` → 1 turn (just answer, no deliberation)
+  - `minimal` → 2 turns
+  - `low` → 4 turns
+  - `medium` → unbounded (qwen's default)
+  - `high` / `xhigh` → unbounded but add a reasoning-depth directive via
+    `--append-system-prompt`
 - `--resume` / `--fresh` — resume the most recent qwen session vs start
   fresh. When neither is given, the command asks via `AskUserQuestion` if
-  there is a resumable session from this Claude session.
+  there is a resumable session. Resume consults the plugin's tracked-jobs
+  state first, then falls back to scanning `~/.qwen/projects/<cwd>/chats`
+  so qwen sessions created outside Claude Code are visible too.
 
 ### `/qwen:review [--wait|--background] [--base <ref>] [--scope auto|working-tree|branch]`
 
@@ -145,10 +154,17 @@ the qwen CLI to pick up the conversation directly.
 
 ### `/qwen:cancel [job-id]`
 
-Terminates an active job. Sends `SIGTERM` to the tracked PID's process
-group (the worker was spawned with `detached: true` on POSIX so
-`kill(-pid)` reaches the full subtree). Marks the job as `cancelled` in
-state and appends the cancellation to the job log.
+Terminates an active job gracefully. Escalates through three signals:
+
+1. **SIGINT** — gives qwen up to 2 s to clean up. Qwen's native handler
+   exits cleanly on SIGINT (rc=130), so this is the common path.
+2. **SIGTERM** — 2 s grace period if SIGINT didn't land.
+3. **SIGKILL** — terminal force-kill if the process still refuses.
+
+Signals are delivered to the whole process group because workers are
+spawned with `detached: true` on POSIX (`kill(-pid)` reaches children).
+The job log records which signal actually terminated the process and
+whether exit was graceful.
 
 ## State layout
 

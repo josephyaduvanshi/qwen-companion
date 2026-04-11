@@ -77,6 +77,32 @@ export function effortToSystemPrompt(effort) {
   return EFFORT_SYSTEM_PROMPTS[normalized] ?? null;
 }
 
+// Effort levels also cap qwen's tool-call budget via --max-session-turns.
+// This gives --effort real teeth: low-effort runs get a hard budget, not
+// just a prompt nudge. High-effort runs keep qwen's default (unbounded)
+// because there's no way to *force* qwen to use more turns than it
+// naturally would.
+//
+// A "session turn" is one round of user → assistant (+ tool calls within
+// that round). max-session-turns 1 means qwen can make tool calls within
+// a single round but cannot start a new round of thinking.
+const EFFORT_MAX_TURNS = {
+  none: 1,
+  minimal: 2,
+  low: 4,
+  medium: null,
+  high: null,
+  xhigh: null
+};
+
+export function effortToMaxSessionTurns(effort) {
+  if (effort == null) return null;
+  const normalized = String(effort).trim().toLowerCase();
+  if (!normalized) return null;
+  const turns = EFFORT_MAX_TURNS[normalized];
+  return typeof turns === "number" ? turns : null;
+}
+
 export function resolveQwenBinary(env = process.env) {
   return env[QWEN_BIN_ENV] || "qwen";
 }
@@ -234,6 +260,13 @@ function buildQwenArgs(options = {}) {
 
   if (options.model) {
     args.push("--model", String(options.model));
+  }
+
+  // --effort level → hard tool-call budget via --max-session-turns.
+  // Complements (does not replace) the system-prompt directive below.
+  const maxTurns = effortToMaxSessionTurns(options.effort);
+  if (typeof maxTurns === "number" && maxTurns > 0) {
+    args.push("--max-session-turns", String(maxTurns));
   }
 
   const appendedSystemPrompt = buildAppendedSystemPrompt({
@@ -694,14 +727,73 @@ export function buildPersistentTaskThreadName(prompt) {
 }
 
 /**
- * Look up the most recent resumable task thread outside of our own state.
+ * Convert an absolute filesystem path into the directory name Qwen uses
+ * under `~/.qwen/projects/`. Qwen's naming convention replaces `/` with
+ * `-` so `/private/tmp/foo` becomes `-private-tmp-foo`.
  *
- * Qwen stores chat recordings on disk but the format is internal and we
- * don't parse it directly. The companion's job-control layer already
- * tracks thread IDs for jobs it launched, which is the authoritative
- * source. This helper exists so the companion can fall back to "no
- * history" cleanly when job-control has nothing for us.
+ * The input must be a canonical (realpath-resolved) absolute path so that
+ * `/tmp/foo` (which macOS symlinks to `/private/tmp/foo`) picks the right
+ * bucket.
  */
-export function findLatestTaskThread(_workspaceRoot) {
-  return null;
+export function workspacePathToQwenProjectDir(canonicalAbsPath) {
+  const normalized = String(canonicalAbsPath || "").replace(/\\/g, "/");
+  if (!normalized.startsWith("/")) return null;
+  return normalized.replaceAll("/", "-");
+}
+
+function canonicalizeCwd(cwd) {
+  try {
+    return fs.realpathSync.native(cwd);
+  } catch {
+    return cwd;
+  }
+}
+
+/**
+ * Look up the most recent resumable task thread for a given workspace.
+ *
+ * Scans `~/.qwen/projects/<sanitized-cwd>/chats/*.jsonl` — qwen writes a
+ * JSONL transcript per session when `--chat-recording` is enabled. The
+ * filename stem is the session id. Returns the newest file by mtime, or
+ * null if the directory doesn't exist or is empty.
+ *
+ * This lets `/qwen:rescue --resume-last` pick up qwen sessions created
+ * outside Claude Code — e.g. sessions you started by running `qwen`
+ * directly in the terminal.
+ *
+ * The companion's tracked-jobs state is still the authoritative source
+ * when it has a candidate; this is the fallback.
+ */
+export function findLatestTaskThread(workspaceRoot, options = {}) {
+  const home = options.home ?? os.homedir();
+  const projectsRoot = path.join(home, ".qwen", "projects");
+  const canonical = canonicalizeCwd(workspaceRoot);
+  const projectDir = workspacePathToQwenProjectDir(canonical);
+  if (!projectDir) return null;
+
+  const chatsDir = path.join(projectsRoot, projectDir, "chats");
+  let entries;
+  try {
+    entries = fs.readdirSync(chatsDir, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+
+  let newest = null;
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue;
+    const abs = path.join(chatsDir, entry.name);
+    let stat;
+    try {
+      stat = fs.statSync(abs);
+    } catch {
+      continue;
+    }
+    if (!newest || stat.mtimeMs > newest.mtimeMs) {
+      newest = { id: entry.name.replace(/\.jsonl$/, ""), file: abs, mtimeMs: stat.mtimeMs };
+    }
+  }
+
+  if (!newest) return null;
+  return { id: newest.id, file: newest.file, mtimeMs: newest.mtimeMs };
 }

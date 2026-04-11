@@ -1,6 +1,6 @@
 {
   "name": "qwen-plugin-cc",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "description": "Qwen Code plugins for Claude Code — derived from OpenAI's codex-plugin-cc and adapted for the Qwen CLI stream-json protocol.",

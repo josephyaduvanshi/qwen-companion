@@ -24,7 +24,7 @@ import {
   runQwenTurn,
   VALID_REASONING_EFFORTS
 } from "./lib/qwen.mjs";
-import { binaryAvailable, terminateProcessTree } from "./lib/process.mjs";
+import { binaryAvailable, gracefullyTerminateProcessTree } from "./lib/process.mjs";
 import { interpolateTemplate, loadPromptTemplate } from "./lib/prompts.mjs";
 import {
   generateJobId,
@@ -375,7 +375,6 @@ function readTaskPrompt(cwd, options, positionals) {
 
 async function resolveLatestTrackedTaskThread(cwd, options = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
-  const sessionId = getCurrentClaudeSessionId();
   const jobs = sortJobsNewestFirst(listJobs(workspaceRoot)).filter(
     (job) => job.id !== options.excludeJobId
   );
@@ -392,8 +391,9 @@ async function resolveLatestTrackedTaskThread(cwd, options = {}) {
     return { id: trackedTask.threadId };
   }
 
-  if (sessionId) return null;
-
+  // Fallback: scan ~/.qwen/projects/<cwd>/chats/*.jsonl for sessions
+  // created outside this plugin (e.g. the user running `qwen` directly
+  // in a terminal). Returns null if the directory is empty or missing.
   return findLatestTaskThread(workspaceRoot);
 }
 
@@ -931,8 +931,15 @@ async function handleCancel(argv) {
     );
   }
 
-  terminateProcessTree(job.pid ?? Number.NaN);
-  appendLogLine(job.logFile, "Cancelled by user.");
+  const termination = await gracefullyTerminateProcessTree(job.pid ?? Number.NaN, {
+    gracePeriodMs: 2000
+  });
+  appendLogLine(
+    job.logFile,
+    termination.attempted
+      ? `Cancelled by user (signal=${termination.finalSignal ?? "?"}${termination.exitedGracefully ? ", graceful" : ", forced"}).`
+      : "Cancelled by user."
+  );
 
   const completedAt = nowIso();
   const nextJob = {
