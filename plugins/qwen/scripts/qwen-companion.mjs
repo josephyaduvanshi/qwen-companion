@@ -88,7 +88,7 @@ function printUsage() {
       "  node scripts/qwen-companion.mjs setup [--enable-review-gate|--disable-review-gate] [--json]",
       "  node scripts/qwen-companion.mjs review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>]",
       "  node scripts/qwen-companion.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [focus text]",
-      "  node scripts/qwen-companion.mjs task [--background] [--write] [--resume-last|--resume|--fresh] [--model <model|alias>] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]",
+      "  node scripts/qwen-companion.mjs task|rescue [--background] [--wait] [--write] [--resume-last|--resume|--fresh] [--model <model|alias>] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]",
       "  node scripts/qwen-companion.mjs status [job-id] [--all] [--wait] [--timeout-ms <ms>] [--json]",
       "  node scripts/qwen-companion.mjs result [job-id] [--json]",
       "  node scripts/qwen-companion.mjs cancel [job-id] [--json]",
@@ -145,6 +145,105 @@ function parseCommandInput(argv, config = {}) {
       ...(config.aliasMap ?? {})
     }
   });
+}
+
+// Pull `--include-dirs <path>[,<path>...]` (alias: `--include-directories`)
+// out of the raw argv. Supports both repeated flag occurrences AND
+// comma-separated lists, and removes the consumed tokens from argv so the
+// remaining flags can be handed to `parseCommandInput` unchanged.
+//
+// This lives outside `parseArgs` because that parser has no concept of
+// "repeatable value option" — the rest of the codebase only uses
+// single-value flags, and we don't want to change its contract.
+function extractIncludeDirs(argv) {
+  const dirs = [];
+  const remaining = [];
+  const FLAGS = new Set(["--include-dirs", "--include-directories"]);
+  for (let i = 0; i < argv.length; i += 1) {
+    const token = argv[i];
+    if (typeof token !== "string") {
+      remaining.push(token);
+      continue;
+    }
+    const eqIdx = token.indexOf("=");
+    const head = eqIdx >= 0 ? token.slice(0, eqIdx) : token;
+    if (FLAGS.has(head)) {
+      let raw;
+      if (eqIdx >= 0) {
+        raw = token.slice(eqIdx + 1);
+      } else {
+        raw = argv[i + 1];
+        if (raw === undefined) {
+          throw new Error(`Missing value for ${head}`);
+        }
+        i += 1;
+      }
+      for (const part of String(raw).split(",")) {
+        const trimmed = part.trim();
+        if (trimmed) dirs.push(trimmed);
+      }
+      continue;
+    }
+    remaining.push(token);
+  }
+  // De-dupe while preserving order.
+  const seen = new Set();
+  const deduped = [];
+  for (const d of dirs) {
+    if (seen.has(d)) continue;
+    seen.add(d);
+    deduped.push(d);
+  }
+  return { includeDirs: deduped, remaining };
+}
+
+// Detect absolute paths in the user's prompt that plainly live outside
+// `cwd`. Used to warn Qwen via a system-prompt addendum when the user
+// did not pass `--include-dirs` — so Qwen is less likely to silently
+// redirect the write into `~/.qwen/tmp/<workspace>/`.
+function findOutsideCwdPathHints(prompt, cwd) {
+  if (typeof prompt !== "string" || !prompt) return [];
+  // Match POSIX absolute paths and `~/...` paths. We do NOT try to handle
+  // Windows drive letters — the rest of the companion assumes POSIX.
+  const matches = prompt.match(/(?:(?<=^)|(?<=[\s"'`(<]))(?:~\/[^\s"'`)<>]+|\/[^\s"'`)<>]+)/g);
+  if (!matches) return [];
+  const home = process.env.HOME ?? "";
+  const resolvedCwd = path.resolve(cwd);
+  const hits = [];
+  const seen = new Set();
+  for (const raw of matches) {
+    let candidate = raw;
+    if (candidate.startsWith("~/")) {
+      if (!home) continue;
+      candidate = path.join(home, candidate.slice(2));
+    }
+    if (!path.isAbsolute(candidate)) continue;
+    // Ignore things that look like flags or URLs.
+    const resolved = path.resolve(candidate);
+    const rel = path.relative(resolvedCwd, resolved);
+    const isInside = rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+    if (isInside) continue;
+    if (seen.has(resolved)) continue;
+    seen.add(resolved);
+    hits.push(resolved);
+  }
+  return hits;
+}
+
+// Build the defensive system-prompt note used when the user's prompt
+// references absolute paths outside `cwd` but did not pass
+// `--include-dirs`. Without this, Qwen's write_file tool silently
+// redirects writes into `~/.qwen/tmp/<workspace>/` — users think the
+// write "didn't happen".
+function buildOutsideCwdAddendum(cwd, outsidePaths) {
+  const list = outsidePaths.map((p) => `  - ${p}`).join("\n");
+  return [
+    `Write files only under: ${cwd}.`,
+    `If you need to write elsewhere (e.g. ${outsidePaths[0]}), do NOT attempt the write.`,
+    "Instead, list the required absolute paths in your final answer so the caller can re-run with `--include-dirs <parent>`.",
+    "Paths the user mentioned that appear to be outside the workspace:",
+    list
+  ].join("\n");
 }
 
 function resolveCommandCwd(options = {}) {
@@ -361,8 +460,28 @@ function buildTaskJob(workspaceRoot, taskMetadata, write) {
   });
 }
 
-function buildTaskRequest({ cwd, model, effort, prompt, write, resumeLast, jobId }) {
-  return { cwd, model, effort, prompt, write, resumeLast, jobId };
+function buildTaskRequest({
+  cwd,
+  model,
+  effort,
+  prompt,
+  write,
+  resumeLast,
+  jobId,
+  includeDirs,
+  allowExternalResume = false
+}) {
+  return {
+    cwd,
+    model,
+    effort,
+    prompt,
+    write,
+    resumeLast,
+    jobId,
+    includeDirs: Array.isArray(includeDirs) ? includeDirs : [],
+    allowExternalResume: Boolean(allowExternalResume)
+  };
 }
 
 function readTaskPrompt(cwd, options, positionals) {
@@ -391,6 +510,18 @@ async function resolveLatestTrackedTaskThread(cwd, options = {}) {
     return { id: trackedTask.threadId };
   }
 
+  // Guard against cross-Claude-session thread pollution. When we are
+  // running inside a Claude session (QWEN_COMPANION_SESSION_ID is set)
+  // and that session has no tracked resumable task, refuse to fall
+  // back to external session discovery — resuming a different
+  // session's thread would silently stitch unrelated work together.
+  // Bypass the guard only when the caller explicitly opts in, or when
+  // we are running outside Claude (no SESSION_ID_ENV).
+  const sessionId = getCurrentClaudeSessionId();
+  if (sessionId && !options.allowExternalResume) {
+    return null;
+  }
+
   // Fallback: scan ~/.qwen/projects/<cwd>/chats/*.jsonl for sessions
   // created outside this plugin (e.g. the user running `qwen` directly
   // in a terminal). Returns null if the directory is empty or missing.
@@ -409,7 +540,8 @@ async function executeTaskRun(request) {
   let resumeThreadId = null;
   if (request.resumeLast) {
     const latestThread = await resolveLatestTrackedTaskThread(workspaceRoot, {
-      excludeJobId: request.jobId
+      excludeJobId: request.jobId,
+      allowExternalResume: Boolean(request.allowExternalResume)
     });
     if (!latestThread) {
       throw new Error("No previous Qwen task thread was found for this repository.");
@@ -421,12 +553,31 @@ async function executeTaskRun(request) {
     throw new Error("Provide a prompt, a prompt file, piped stdin, or use --resume-last.");
   }
 
+  const includeDirs = Array.isArray(request.includeDirs) ? request.includeDirs : [];
+
+  // Defensive: if the user's prompt names absolute paths outside `cwd` and
+  // they did NOT pass --include-dirs, prepend a system-prompt note so
+  // Qwen surfaces the required paths instead of silently redirecting
+  // writes to `~/.qwen/tmp/<workspace>/`.
+  let appendSystemPrompt = request.appendSystemPrompt;
+  if (request.write && includeDirs.length === 0 && request.prompt) {
+    const outside = findOutsideCwdPathHints(request.prompt, workspaceRoot);
+    if (outside.length > 0) {
+      const note = buildOutsideCwdAddendum(workspaceRoot, outside);
+      appendSystemPrompt = appendSystemPrompt
+        ? `${note}\n\n${appendSystemPrompt}`
+        : note;
+    }
+  }
+
   const result = await runQwenTurn(workspaceRoot, {
     resumeThreadId,
     prompt: request.prompt || (resumeThreadId ? DEFAULT_CONTINUE_PROMPT : ""),
     model: request.model,
     effort: request.effort,
     sandbox: request.write ? "workspace-write" : "read-only",
+    includeDirs,
+    appendSystemPrompt,
     onProgress: request.onProgress,
     onSpawn: request.onSpawn
   });
@@ -487,7 +638,10 @@ function spawnDetachedTaskWorker(cwd, jobId) {
   return child;
 }
 
-function enqueueBackgroundTask(cwd, job, request) {
+// Persist the queued record, then spawn the detached worker. Shared by
+// task/review/adversarial-review background paths — the worker dispatches
+// on storedJob.kind to run the right flow.
+function enqueueBackgroundJob(cwd, job, request) {
   const { logFile } = createTrackedProgress(job);
   appendLogLine(logFile, "Queued for background execution.");
 
@@ -514,6 +668,9 @@ function enqueueBackgroundTask(cwd, job, request) {
     logFile
   };
 }
+
+// Legacy name kept for any callers that still reach in by this spelling.
+const enqueueBackgroundTask = enqueueBackgroundJob;
 
 function renderQueuedTaskLaunch(payload) {
   return `${payload.title} started in the background as ${payload.jobId}. Check /qwen:status ${payload.jobId} for progress.\n`;
@@ -544,22 +701,53 @@ async function handleTaskWorker(argv) {
     { ...storedJob, workspaceRoot },
     { logFile: storedJob.logFile ?? null }
   );
-  await runTrackedJob(
-    { ...storedJob, workspaceRoot, logFile },
-    () =>
-      executeTaskRun({
+
+  const kind = storedJob.kind ?? "task";
+  const runner = () => {
+    if (kind === "review" || kind === "adversarial-review") {
+      return executeReviewRun({
         ...request,
+        reviewName: request.reviewName ?? (kind === "adversarial-review" ? "Adversarial Review" : "Review"),
         onProgress: progress,
         onSpawn: recordSpawnedPid(workspaceRoot, options["job-id"])
-      }),
+      });
+    }
+    return executeTaskRun({
+      ...request,
+      onProgress: progress,
+      onSpawn: recordSpawnedPid(workspaceRoot, options["job-id"])
+    });
+  };
+
+  await runTrackedJob(
+    { ...storedJob, workspaceRoot, logFile },
+    runner,
     { logFile }
   );
 }
 
 async function handleTask(argv) {
-  const { options, positionals } = parseCommandInput(argv, {
+  // Extract --include-dirs / --include-directories first — the generic
+  // parseArgs has no repeatable-value-option concept, so we pre-strip
+  // those tokens and hand the rest to parseCommandInput.
+  const normalized = normalizeArgv(argv);
+  const { includeDirs, remaining } = extractIncludeDirs(normalized);
+
+  const { options, positionals } = parseCommandInput(remaining, {
     valueOptions: ["model", "effort", "cwd", "prompt-file"],
-    booleanOptions: ["json", "write", "resume-last", "resume", "fresh", "background"],
+    // `--wait` is accepted (no-op) purely so it is stripped from
+    // positionals. Without this, `task --wait "do X"` would concatenate
+    // the literal token `--wait` into the prompt.
+    booleanOptions: [
+      "json",
+      "write",
+      "resume-last",
+      "resume",
+      "fresh",
+      "background",
+      "wait",
+      "allow-external-resume"
+    ],
     aliasMap: { m: "model" }
   });
 
@@ -575,13 +763,16 @@ async function handleTask(argv) {
     throw new Error("Choose either --resume/--resume-last or --fresh.");
   }
   const write = Boolean(options.write);
+  const allowExternalResume = Boolean(options["allow-external-resume"]);
   const taskMetadata = buildTaskRunMetadata({ prompt, resumeLast });
+
+  const hasPrompt = Boolean(prompt && String(prompt).trim());
+  if (!hasPrompt && !resumeLast) {
+    throw new Error("Provide a prompt, a prompt file, piped stdin, or use --resume-last.");
+  }
 
   if (options.background) {
     ensureQwenAvailable(cwd);
-    if (!prompt && !resumeLast) {
-      throw new Error("Provide a prompt, a prompt file, piped stdin, or use --resume-last.");
-    }
 
     const job = buildTaskJob(workspaceRoot, taskMetadata, write);
     const request = buildTaskRequest({
@@ -591,9 +782,11 @@ async function handleTask(argv) {
       prompt,
       write,
       resumeLast,
-      jobId: job.id
+      jobId: job.id,
+      includeDirs,
+      allowExternalResume
     });
-    const { payload } = enqueueBackgroundTask(cwd, job, request);
+    const { payload } = enqueueBackgroundJob(cwd, job, request);
     outputCommandResult(payload, renderQueuedTaskLaunch(payload), options.json);
     return;
   }
@@ -609,7 +802,9 @@ async function handleTask(argv) {
         prompt,
         write,
         resumeLast,
+        allowExternalResume,
         jobId: job.id,
+        includeDirs,
         onProgress: progress,
         onSpawn: recordSpawnedPid(workspaceRoot, job.id)
       }),
@@ -669,6 +864,7 @@ async function executeReviewRun(request) {
     const result = await runQwenReview(workspaceRoot, {
       model: request.model,
       targetHint: buildNativeReviewTargetHint(target),
+      includeDirs: Array.isArray(request.includeDirs) ? request.includeDirs : [],
       onProgress: request.onProgress,
       onSpawn: request.onSpawn
     });
@@ -716,6 +912,7 @@ async function executeReviewRun(request) {
     model: request.model,
     sandbox: "read-only",
     outputSchema: readOutputSchema(REVIEW_SCHEMA_FILE),
+    includeDirs: Array.isArray(request.includeDirs) ? request.includeDirs : [],
     onProgress: request.onProgress,
     onSpawn: request.onSpawn
   });
@@ -762,7 +959,9 @@ async function executeReviewRun(request) {
 }
 
 async function handleReviewCommand(argv, config) {
-  const { options, positionals } = parseCommandInput(argv, {
+  const normalized = normalizeArgv(argv);
+  const { includeDirs, remaining } = extractIncludeDirs(normalized);
+  const { options, positionals } = parseCommandInput(remaining, {
     valueOptions: ["base", "scope", "model", "cwd"],
     booleanOptions: ["json", "background", "wait"],
     aliasMap: { m: "model" }
@@ -787,6 +986,23 @@ async function handleReviewCommand(argv, config) {
     jobClass: "review",
     summary: metadata.summary
   });
+
+  if (options.background) {
+    ensureQwenAvailable(cwd);
+    const request = {
+      cwd,
+      base: options.base,
+      scope: options.scope,
+      model,
+      focusText,
+      reviewName: config.reviewName,
+      includeDirs
+    };
+    const { payload } = enqueueBackgroundJob(cwd, job, request);
+    outputCommandResult(payload, renderQueuedTaskLaunch(payload), options.json);
+    return;
+  }
+
   await runForegroundCommand(
     job,
     (progress) =>
@@ -797,6 +1013,7 @@ async function handleReviewCommand(argv, config) {
         model,
         focusText,
         reviewName: config.reviewName,
+        includeDirs,
         onProgress: progress,
         onSpawn: recordSpawnedPid(workspaceRoot, job.id)
       }),
@@ -942,13 +1159,24 @@ async function handleCancel(argv) {
   );
 
   const completedAt = nowIso();
+  // If cancel fires mid-stream before a result envelope was seen, any
+  // partial finalMessage we captured (often a JSON fragment like `},`)
+  // would end up as the stored summary — which renders as noise in
+  // status/listing output. Prefer a clean placeholder, falling back to
+  // the job's original prompt excerpt if present.
+  const cleanCancelSummary =
+    (typeof existing.summary === "string" && existing.summary.trim() && existing.summary) ||
+    (typeof job.summary === "string" && job.summary.trim() && job.summary) ||
+    "Cancelled by user.";
+
   const nextJob = {
     ...job,
     status: "cancelled",
     phase: "cancelled",
     pid: null,
     completedAt,
-    errorMessage: "Cancelled by user."
+    errorMessage: "Cancelled by user.",
+    summary: cleanCancelSummary
   };
 
   writeJobFile(workspaceRoot, job.id, {
@@ -962,6 +1190,7 @@ async function handleCancel(argv) {
     phase: "cancelled",
     pid: null,
     errorMessage: "Cancelled by user.",
+    summary: cleanCancelSummary,
     completedAt
   });
 
@@ -996,6 +1225,7 @@ async function main() {
       await handleReviewCommand(argv, { reviewName: "Adversarial Review" });
       break;
     case "task":
+    case "rescue":
       await handleTask(argv);
       break;
     case "task-worker":

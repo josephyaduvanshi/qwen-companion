@@ -1,9 +1,20 @@
 ---
 description: Delegate investigation, an explicit fix request, or follow-up rescue work to the Qwen rescue subagent
-argument-hint: "[--background|--wait] [--resume|--fresh] [--model <model|alias>] [--effort <none|minimal|low|medium|high|xhigh>] [what Qwen should investigate, solve, or continue]"
+argument-hint: "[--background|--wait] [--resume|--fresh] [--model <model|alias>] [--effort <none|minimal|low|medium|high|xhigh>] [--include-dirs <path>[,<path>...]] [what Qwen should investigate, solve, or continue]"
 context: fork
 allowed-tools: Bash(node:*), AskUserQuestion
 ---
+
+Flags:
+
+- `--include-dirs <path>[,<path>...]` — expand Qwen's write sandbox beyond `cwd`. Required if you ask Qwen to write files outside the current workspace. Without this, Qwen silently redirects writes to `~/.qwen/tmp/<workspace>/`. May be comma-separated or repeated.
+
+Example:
+
+```
+/qwen:rescue --include-dirs /tmp,/Users/me/output draft a research doc at /tmp/research.md
+```
+
 
 Route this request to the `qwen:qwen-rescue` subagent.
 The final user-visible response must be Qwen's output verbatim.

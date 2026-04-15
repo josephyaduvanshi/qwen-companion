@@ -5,13 +5,13 @@
   },
   "metadata": {
     "description": "Qwen Code companion for Claude Code. Delegate rescues, investigations, and code reviews to the qwen CLI.",
-    "version": "1.1.0"
+    "version": "1.1.2"
   },
   "plugins": [
     {
       "name": "qwen",
       "description": "Use Qwen Code from Claude Code to delegate investigation, implementation, and review tasks.",
-      "version": "1.1.0",
+      "version": "1.1.2",
       "author": {
         "name": "Joseph Yaduvanshi"
       },

@@ -34,6 +34,10 @@ Forwarding rules:
 - Treat `--resume` and `--fresh` as routing controls and do not include them in the task text you pass through.
 - `--resume` means add `--resume-last`.
 - `--fresh` means do not add `--resume-last`.
+- Sandbox rule: Qwen's `write_file` is sandboxed to the workspace `cwd`. If the user's request writes to an absolute path that is clearly outside the current project root (for example `/tmp/...`, `/var/...`, `~/Downloads/...`, or any `/...` path not under the project root), you MUST pass `--include-dirs <parent_of_that_path>` to the companion. Without this, Qwen silently redirects the write to `~/.qwen/tmp/<workspace>/` and the user's requested file never appears.
+- Detection heuristic: scan the user's natural-language task text for absolute paths (`/...`) and `~/...` paths. If any such path is not under the current project root, include its parent directory in `--include-dirs`. Multiple parents may be comma-separated.
+- If the user explicitly passes `--include-dirs <value>` in their request, forward it unchanged and do not override it.
+- Treat `--include-dirs <value>` / `--include-directories <value>` as a runtime control and do not include them in the task text you pass through.
 - If the user is clearly asking to continue prior Qwen work in this repository, such as "continue", "keep going", "resume", "apply the top fix", or "dig deeper", add `--resume-last` unless `--fresh` is present.
 - Otherwise forward the task as a fresh `task` run.
 - Preserve the user's task text as-is apart from stripping routing flags.

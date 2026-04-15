@@ -215,6 +215,16 @@ Claude will pick up the cue and route through the subagent.
 - `--model <alias>` — `plus`, `max`, `turbo`, `coder`, `glm`, `kimi`, or any model string your qwen install knows
 - `--effort <level>` — `none`, `minimal`, `low`, `medium`, `high`, `xhigh` (details [below](#the---effort-flag-how-it-actually-works))
 - `--resume` / `--fresh` — continue the latest Qwen session for this repo, or start a new one
+- `--include-dirs <path>[,<path>...]` — expand Qwen's write sandbox beyond `cwd`
+
+> [!WARNING]
+> **Writing outside the workspace needs `--include-dirs`.** Qwen CLI sandboxes `write_file` to the workspace `cwd`, even in `--yolo` mode. If you ask Qwen to write `/tmp/foo.md` while running from `/home/me/project`, Qwen silently redirects the write to `~/.qwen/tmp/<workspace>/foo.md` and the file never appears at the requested path. Pass `--include-dirs <parent>` to expand the sandbox. Example:
+>
+> ```
+> /qwen:rescue --include-dirs /tmp,/Users/me/output draft a research doc at /tmp/research.md
+> ```
+>
+> The `qwen-rescue` subagent also tries to detect outside-of-cwd paths in your request and add `--include-dirs` automatically — but relying on that is not as reliable as being explicit.
 
 > [!NOTE]
 > Rescues can take a while depending on the model and the task. If the job looks open-ended, prefer `--background` and check back with `/qwen:status`.

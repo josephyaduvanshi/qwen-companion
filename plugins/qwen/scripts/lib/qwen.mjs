@@ -236,6 +236,20 @@ function buildAppendedSystemPrompt({ effort, outputSchema, extraSystemPrompt }) 
 
 // ---------- Turn execution ----------
 
+/**
+ * Build the argv list for spawning the Qwen CLI.
+ *
+ * Supported options (non-exhaustive):
+ *   - sandbox: "workspace-write" | "read-only"
+ *   - resumeThreadId: string
+ *   - model: string
+ *   - includeDirs: string[] — expand Qwen's write sandbox beyond cwd.
+ *       Emitted as `--include-directories <a>,<b>`. Required when the
+ *       prompt asks Qwen to write files outside the workspace cwd;
+ *       without it, Qwen silently redirects writes to
+ *       `~/.qwen/tmp/<workspace>/` even in yolo mode.
+ *   - extraArgs: string[]
+ */
 function buildQwenArgs(options = {}) {
   const args = ["--output-format", "stream-json", "--include-partial-messages"];
 
@@ -282,6 +296,23 @@ function buildQwenArgs(options = {}) {
     args.push("--system-prompt", String(options.systemPrompt));
   }
 
+  if (Array.isArray(options.includeDirs) && options.includeDirs.length > 0) {
+    // Qwen accepts a comma-separated list on --include-directories.
+    // De-dupe and drop empties so callers can pass raw user input.
+    const cleaned = [];
+    const seen = new Set();
+    for (const entry of options.includeDirs) {
+      if (typeof entry !== "string") continue;
+      const trimmed = entry.trim();
+      if (!trimmed || seen.has(trimmed)) continue;
+      seen.add(trimmed);
+      cleaned.push(trimmed);
+    }
+    if (cleaned.length > 0) {
+      args.push("--include-directories", cleaned.join(","));
+    }
+  }
+
   if (Array.isArray(options.extraArgs)) {
     args.push(...options.extraArgs);
   }
@@ -303,6 +334,34 @@ function extractTouchedFilesFromToolInput(toolName, input) {
     }
   }
   return candidates;
+}
+
+// Strip stray `[Thought: ...]` / `[Thinking: ...]` markers that some
+// upstream providers embed in streamed assistant text on resumed turns.
+// These should never have leaked out of the reasoning channel in the
+// first place — strip defensively so they don't render in final output.
+const THOUGHT_MARKER_RE = /\[Thought(?:ing)?:\s*[^\]]*\]\s*/gi;
+export function stripThoughtMarkers(text) {
+  if (typeof text !== "string" || !text) return text;
+  return text.replace(THOUGHT_MARKER_RE, "");
+}
+
+// Scan the stderr buffer for upstream error signals (429 / quota /
+// RESOURCE_EXHAUSTED / rate limit) and return the first matching line,
+// truncated. Helps surface actionable detail that would otherwise be
+// lost because the JSON result envelope only carries a generic message.
+export function extractUpstreamErrorSignalFromStderr(stderr) {
+  if (typeof stderr !== "string" || !stderr) return null;
+  const lines = stderr.split(/\r?\n/);
+  const re = /\b(429|RESOURCE_EXHAUSTED|QUOTA|rate[- ]?limit)/i;
+  for (const raw of lines) {
+    if (re.test(raw)) {
+      const trimmed = raw.trim();
+      if (!trimmed) continue;
+      return trimmed.length > 200 ? `${trimmed.slice(0, 197)}...` : trimmed;
+    }
+  }
+  return null;
 }
 
 function handleStreamEvent(event, state, onProgress) {
@@ -360,7 +419,7 @@ function handleStreamEvent(event, state, onProgress) {
       const delta = inner.delta;
       if (!delta) return;
       if (delta.type === "text_delta" && typeof delta.text === "string") {
-        state.finalMessage += delta.text;
+        state.finalMessage += stripThoughtMarkers(delta.text);
         return;
       }
       if (delta.type === "thinking_delta" && typeof delta.thinking === "string") {
@@ -424,7 +483,7 @@ function handleStreamEvent(event, state, onProgress) {
     for (const block of content) {
       if (block?.type === "text" && typeof block.text === "string") {
         if (!state.finalMessage) {
-          state.finalMessage = block.text;
+          state.finalMessage = stripThoughtMarkers(block.text);
         }
       }
       if (block?.type === "thinking" && typeof block.thinking === "string") {
@@ -473,7 +532,33 @@ function handleStreamEvent(event, state, onProgress) {
     state.durationMs = event.duration_ms ?? null;
 
     if (event.is_error) {
-      const detail = typeof event.result === "string" && event.result ? event.result : (event.error ?? "Qwen returned an error.");
+      let detail;
+      if (typeof event.result === "string" && event.result) {
+        detail = event.result;
+      } else if (event.error && typeof event.error === "object") {
+        // Qwen/upstream providers sometimes emit
+        // `error: { type, message, code, ... }` — surface the message
+        // and the type so users see RESOURCE_EXHAUSTED / 429 / etc.
+        const parts = [];
+        if (typeof event.error.message === "string" && event.error.message) {
+          parts.push(event.error.message);
+        }
+        if (typeof event.error.type === "string" && event.error.type) {
+          parts.push(`[${event.error.type}]`);
+        }
+        if (typeof event.error.code === "string" && event.error.code) {
+          parts.push(`(${event.error.code})`);
+        }
+        detail = parts.length > 0 ? parts.join(" ") : "Qwen returned an error.";
+      } else if (typeof event.error === "string" && event.error) {
+        detail = event.error;
+      } else {
+        detail = "Qwen returned an error.";
+      }
+      const stderrSignal = extractUpstreamErrorSignalFromStderr(state.stderrBuffer);
+      if (stderrSignal) {
+        detail = `${detail} — ${stderrSignal}`;
+      }
       state.resultStatus = "error";
       state.error = new Error(String(detail));
       onProgress?.({
@@ -487,7 +572,7 @@ function handleStreamEvent(event, state, onProgress) {
 
     state.resultStatus = "success";
     if (typeof event.result === "string" && event.result && !state.finalMessage) {
-      state.finalMessage = event.result;
+      state.finalMessage = stripThoughtMarkers(event.result);
     }
     onProgress?.({
       message: "Qwen turn finished",
@@ -526,7 +611,9 @@ function toTurnResult(state, exitCode) {
     status = 1;
   }
   if (!state.resultEnvelopeSeen && !state.finalMessage && state.stderrBuffer.trim() && !state.error) {
-    state.error = new Error(state.stderrBuffer.trim().split("\n").slice(-5).join("\n"));
+    const signal = extractUpstreamErrorSignalFromStderr(state.stderrBuffer);
+    const tail = state.stderrBuffer.trim().split("\n").slice(-5).join("\n");
+    state.error = new Error(signal ? `${signal}\n${tail}` : tail);
     status = 1;
   }
   return {

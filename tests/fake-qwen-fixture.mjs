@@ -12,6 +12,7 @@ import process from "node:process";
 const FAKE_QWEN_SOURCE = String.raw`// Auto-generated fake qwen binary for qwen-companion tests.
 // Invoked by the sibling shell shim (./qwen) via \`node qwen.mjs "$@"\`.
 import process from "node:process";
+import fs from "node:fs";
 
 const scenario = process.env.FAKE_QWEN_SCENARIO || "hello-world";
 
@@ -35,12 +36,26 @@ if (process.argv.includes("auth") && process.argv.includes("status")) {
   process.exit(0);
 }
 
+const args = process.argv.slice(2);
+
 // Drain stdin so the parent can call stdin.end() cleanly.
 let stdinBuffer = "";
 process.stdin.on("data", (chunk) => { stdinBuffer += String(chunk); });
 
+function dumpArgsIfRequested() {
+  if (!process.env.FAKE_QWEN_DUMP_ARGS) return;
+  try {
+    fs.writeFileSync(process.env.FAKE_QWEN_DUMP_ARGS, JSON.stringify({
+      args,
+      stdin: stdinBuffer,
+      cwd: process.cwd()
+    }));
+  } catch { /* best effort */ }
+}
+
 async function run() {
   await new Promise((resolve) => process.stdin.on("end", resolve));
+  dumpArgsIfRequested();
 
   const sessionId = "fake-session-00000000";
   emit({

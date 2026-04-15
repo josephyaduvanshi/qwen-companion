@@ -88,3 +88,77 @@ test("runQwenTurn: empty prompt throws", async () => {
     /non-empty prompt/
   );
 });
+
+function newDumpPath() {
+  return path.join(fs.mkdtempSync(path.join(os.tmpdir(), "qwen-dump-")), "dump.json");
+}
+
+function readDump(p) {
+  return JSON.parse(fs.readFileSync(p, "utf8"));
+}
+
+test("runQwenTurn: includeDirs flows through to --include-directories arg (single path)", async () => {
+  const { binPath } = installFakeQwen();
+  const dump = newDumpPath();
+  const cwd = freshCwd();
+  await runQwenTurn(cwd, {
+    prompt: "write /tmp/foo.md",
+    includeDirs: ["/tmp"],
+    env: {
+      ...process.env,
+      QWEN_BIN: binPath,
+      FAKE_QWEN_DUMP_ARGS: dump
+    }
+  });
+
+  const dumped = readDump(dump);
+  const idx = dumped.args.indexOf("--include-directories");
+  assert.notEqual(
+    idx,
+    -1,
+    `expected --include-directories in args, got ${dumped.args.join(" ")}`
+  );
+  assert.equal(dumped.args[idx + 1], "/tmp");
+});
+
+test("runQwenTurn: includeDirs with multiple paths joins as comma-separated list", async () => {
+  const { binPath } = installFakeQwen();
+  const dump = newDumpPath();
+  const cwd = freshCwd();
+  await runQwenTurn(cwd, {
+    prompt: "write files",
+    includeDirs: ["/tmp", "/var/log", "/tmp"], // duplicate to verify de-dupe
+    env: {
+      ...process.env,
+      QWEN_BIN: binPath,
+      FAKE_QWEN_DUMP_ARGS: dump
+    }
+  });
+
+  const dumped = readDump(dump);
+  const idx = dumped.args.indexOf("--include-directories");
+  assert.notEqual(idx, -1, `expected --include-directories in args, got ${dumped.args.join(" ")}`);
+  assert.equal(dumped.args[idx + 1], "/tmp,/var/log");
+});
+
+test("runQwenTurn: empty includeDirs list does NOT emit --include-directories", async () => {
+  const { binPath } = installFakeQwen();
+  const dump = newDumpPath();
+  const cwd = freshCwd();
+  await runQwenTurn(cwd, {
+    prompt: "no extra dirs",
+    includeDirs: [],
+    env: {
+      ...process.env,
+      QWEN_BIN: binPath,
+      FAKE_QWEN_DUMP_ARGS: dump
+    }
+  });
+
+  const dumped = readDump(dump);
+  assert.equal(
+    dumped.args.indexOf("--include-directories"),
+    -1,
+    `did not expect --include-directories in args, got ${dumped.args.join(" ")}`
+  );
+});

@@ -4,6 +4,35 @@ All notable changes to this project will be documented in this file. The
 format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] — 2026-04-14
+
+Bug fix — `/qwen:rescue` now supports `--include-dirs`.
+
+### Added
+
+- `--include-dirs <path>[,<path>...]` (alias `--include-directories`) on
+  `/qwen:rescue` and the `task` subcommand. Expands Qwen's `write_file`
+  sandbox beyond the workspace `cwd`. Without it, Qwen silently redirects
+  writes to `~/.qwen/tmp/<workspace>/` when asked to write to an absolute
+  path outside `cwd` (even in `--yolo` mode). The flag passes through to
+  `qwen --include-directories <a>,<b>` with de-duping.
+- Defensive system-prompt addendum — when the user's `--write` prompt
+  mentions absolute paths outside `cwd` and they did NOT pass
+  `--include-dirs`, the companion injects a short note telling Qwen to
+  surface the required paths instead of silently redirecting the write.
+- `qwen-rescue` subagent sandbox-detection rule. Scans the natural-
+  language task text for `/...` and `~/...` paths and auto-adds
+  `--include-dirs <parent>` when the path is outside the project root.
+- 3 new tests covering `includeDirs` → `--include-directories` arg
+  emission (single path, multi-path + de-dupe, empty list suppresses).
+
+### Changed
+
+- `buildQwenArgs()` now accepts `options.includeDirs: string[]`.
+- `extractIncludeDirs(argv)` handles `--include-dirs`/`--include-directories`
+  with comma-separated values and repeated flag occurrences before the
+  rest of argv hits the generic parser.
+
 ## [1.1.0] — 2026-04-11
 
 Caveat fixes — closes three of the four known limitations from v1.0.0.
@@ -101,6 +130,7 @@ Initial MVP baseline. `setup`, `rescue` (via `qwen-rescue` subagent),
 `status`, `result`, `cancel`, session-lifecycle hook, three skills, basic
 test suite. Never published; see the git history for details.
 
+[1.1.1]: https://github.com/josephyaduvanshi/qwen-companion/releases/tag/v1.1.1
 [1.1.0]: https://github.com/josephyaduvanshi/qwen-companion/releases/tag/v1.1.0
 [1.0.0]: https://github.com/josephyaduvanshi/qwen-companion/releases/tag/v1.0.0
 [0.1.0]: https://github.com/josephyaduvanshi/qwen-companion/releases/tag/v0.1.0
