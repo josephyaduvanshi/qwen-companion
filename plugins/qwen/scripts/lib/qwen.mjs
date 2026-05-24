@@ -37,11 +37,20 @@
 //     durationMs: number | null
 //   }
 
-import { spawn } from "node:child_process";
+import crossSpawn from "cross-spawn";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
+
+// cross-spawn handles Windows .cmd shim resolution that Node 22's CVE-2024-27980
+// mitigation blocks with `shell: false`. `runQwenTurn` streams stdin/stdout via
+// the streaming `spawn` API (not `spawnSync`), and `bin = resolveQwenBinary()` is
+// the `qwen.cmd` shim on Windows. Pre-fix: `spawn("qwen", ...)` returned ENOENT
+// silently and `task`/`rescue` died before producing any output. cross-spawn
+// exec's the resolved absolute path through Node's spawn primitives, bypassing
+// cmd.exe entirely — no shell-injection risk from user prompts passed as argv.
+const spawn = (command, args, options) => crossSpawn(command, args, options);
 
 import { binaryAvailable, runCommand } from "./process.mjs";
 

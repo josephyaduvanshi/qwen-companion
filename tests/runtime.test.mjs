@@ -11,6 +11,12 @@ function freshCwd() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "qwen-runtime-"));
 }
 
+// Note: this test (and all sibling `runQwenTurn:` tests) doubles as the cross-spawn
+// regression for Node 22 + Windows. `installFakeQwen()` writes a `.cmd` shim on
+// Windows (fake-qwen-fixture.mjs:162-164); bare `spawn("qwen.cmd", ...)` ENOENTs
+// under Node ≥18.19/20.10/22 CVE-2024-27980 mitigation, so any of these tests
+// failing on Windows with ENOENT is the trigger to verify cross-spawn is still
+// wired in `plugins/qwen/scripts/lib/qwen.mjs`.
 test("runQwenTurn: default hello-world scenario streams text deltas", async () => {
   const { binPath } = installFakeQwen();
   const events = [];
